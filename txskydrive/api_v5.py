@@ -54,16 +54,9 @@ class MultipartDataSender(object):
 
 	@defer.inlineCallbacks
 	def upload_file(self, src, dst):
-		log.debug('UPLOAD')
-		print src, src.tell()
-		src.seek(0)
-		print len(src.read())
-		reactor.stop()
-		exit()
 		try:
 			while True:
 				chunk = src.read(self.chunk_size)
-				log.debug('Chunk LEN: {}'.format(len(chunk)))
 				if not chunk: break
 				yield dst.write(chunk)
 		finally: src.close()
