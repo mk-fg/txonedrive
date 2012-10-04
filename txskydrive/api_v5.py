@@ -16,7 +16,7 @@ from twisted.web.http_headers import Headers
 from twisted.web import http
 from twisted.internet import defer, reactor, ssl, task, protocol
 
-from skydrive import api_v5
+from skydrive import api_v5, conf
 
 from twisted.python import log
 for lvl in 'debug', 'info', ('warning', 'warn'), 'error', ('critical', 'fatal'):
@@ -336,28 +336,27 @@ class txSkyDrive(txSkyDriveAPI):
 
 
 
+class txSkyDriveAPIPersistent(txSkyDrive, conf.ConfigMixin):
+
+	@ft.wraps(txSkyDrive.auth_get_token)
+	def auth_get_token(self, *argz, **kwz):
+		d = defer.maybeDeferred(super(
+			txSkyDriveAPIPersistent, self ).auth_get_token, *argz, **kwz)
+		d.addCallback(lambda ret: [self.sync(), ret][1])
+		return d
+
+	def __del__(self): self.sync()
+
+
+
+
 if __name__ == '__main__':
 	logging.basicConfig(level=logging.DEBUG)
 	log.PythonLoggingObserver().start()
 
-
-	from skydrive.conf import ConfigMixin
-
-	class txSkyDriveTest(txSkyDrive, ConfigMixin):
-
-		@ft.wraps(txSkyDrive.auth_get_token)
-		def auth_get_token(self, *argz, **kwz):
-			d = defer.maybeDeferred(super(
-				txSkyDriveTest, self ).auth_get_token, *argz, **kwz)
-			d.addCallback(lambda ret: [self.sync(), ret][1])
-			return d
-
-		def __del__(self): self.sync()
-
-
 	@defer.inlineCallbacks
 	def test():
-		api = txSkyDriveTest.from_conf()
+		api = txSkyDriveAPIPersistent.from_conf()
 
 		print map(op.itemgetter('name'), (yield api.listdir()))
 
@@ -372,7 +371,6 @@ if __name__ == '__main__':
 		print 'Uploaded:', res
 
 		reactor.stop()
-
 
 	test()
 	reactor.run()

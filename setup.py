@@ -12,11 +12,12 @@ except IOError: readme = ''
 setup(
 
 	name = 'txSkyDrive', # just trying to mimic tx* naming convention
-	version = '12.10.6',
+	version = '12.10.7',
 	author = 'Mike Kazantsev',
 	author_email = 'mk.fraggod@gmail.com',
 	license = 'WTFPL',
-	keywords = 'skydrive twisted api oauth2 rest microsoft cloud live liveconnect',
+	keywords = 'skydrive twisted async api'
+		' oauth2 rest microsoft cloud live liveconnect',
 	url = 'http://github.com/mk-fg/txskydrive',
 
 	description = 'Twisted-based async interface'
