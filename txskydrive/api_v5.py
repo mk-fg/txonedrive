@@ -16,9 +16,15 @@ from twisted.web.http_headers import Headers
 from twisted.web import http
 from twisted.internet.protocol import Protocol
 from twisted.internet import defer, reactor, ssl, task
-from twisted.python import log
 
 from skydrive import api_v5
+
+from twisted.python import log
+for lvl in 'debug', 'info', ('warning', 'warn'), 'error', ('critical', 'fatal'):
+	lvl, func = lvl if isinstance(lvl, tuple) else (lvl, lvl)
+	assert not getattr(log, lvl, False)
+	setattr(log, func, ft.partial( log.msg,
+		logLevel=logging.getLevelName(lvl.upper()) ))
 
 
 
@@ -39,31 +45,37 @@ class MultipartDataSender(object):
 	implements(IBodyProducer)
 
 	#: Single read/write size
-	chunk_size = 512 * 2**10 # 512 KiB
+	chunk_size = 64 * 2**10 # 64 KiB
 
-	def __init__(self, fields):
-		self.fields = fields
+	def __init__(self, fields, boundary):
+		self.fields, self.boundary = fields, boundary
 		self.length = UNKNOWN_LENGTH
-		self.task = False
+		self.task = None
 
-	def upload_file(src, dst):
-		def _writeloop():
-			try:
-				while True:
-					chunk = src.read(self.chunk_size)
-					if not chunk: break
-					dst.write(chunk)
-					yield
-			finally: src.close()
-		return task.cooperate(_writeloop()).whenDone()
+	@defer.inlineCallbacks
+	def upload_file(self, src, dst):
+		log.debug('UPLOAD')
+		print src, src.tell()
+		src.seek(0)
+		print len(src.read())
+		reactor.stop()
+		exit()
+		try:
+			while True:
+				chunk = src.read(self.chunk_size)
+				log.debug('Chunk LEN: {}'.format(len(chunk)))
+				if not chunk: break
+				yield dst.write(chunk)
+		finally: src.close()
 
 	@defer.inlineCallbacks
 	def send_form(self, dst):
 		for name, data in self.fields.viewitems():
-			dst.write(b'--{}\r\n'.format(boundary))
+			dst.write(b'--{}\r\n'.format(self.boundary))
 
 			if isinstance(data, tuple):
-				(fn, data), ct = data, guess_type(fn)[0] or b'application/octet-stream'
+				fn, data = data
+				ct = guess_type(fn)[0] or b'application/octet-stream'
 				dst.write(
 					b'Content-Disposition: form-data;'
 					b' name="{}"; filename="{}"\r\n'.format(name, fn) )
@@ -73,25 +85,30 @@ class MultipartDataSender(object):
 					b' form-data; name="{}"\r\n'.format(name) )
 			dst.write(b'Content-Type: {}\r\n\r\n'.format(ct))
 
-			if isinstance(data, type.StringTypes): dst.write(data)
+			if isinstance(data, types.StringTypes): dst.write(data)
 			else: yield self.upload_file(data, dst)
 			dst.write(b'\r\n')
 
-		dst.write(b'--{}--\r\n'.format(boundary))
+		dst.write(b'--{}--\r\n'.format(self.boundary))
+
+		self.task = None # done
 
 	def startProducing(self, dst):
-		if not self.task: self.task = self.send_form()
+		if not self.task: self.task = self.send_form(dst)
 		return self.task
 
 	def resumeProducing(self):
+		if not self.task: return
 		self.task.unpause()
 
 	def pauseProducing(self):
+		if not self.task: return
 		self.task.pause()
 
 	def stopProducing(self):
+		if not self.task: return
 		self.task.cancel()
-		self.task = False
+		self.task = None
 
 
 
@@ -136,11 +153,14 @@ class txSkyDrive(api_v5.SkyDriveAPIWrapper):
 	#: Path string or list of strings
 	ca_certs_files = b'/etc/ssl/certs/ca-certificates.crt'
 
+	#: Dump HTTP request data in debug log (might contain all sorts of auth tokens!)
+	debug_requests = False
+
 
 	def __init__(self, *argz, **kwz):
 		super(txSkyDrive, self).__init__(*argz, **kwz)
 
-		pool = HTTPConnectionPool(reactor)
+		pool = HTTPConnectionPool(reactor, persistent=True)
 		for k, v in self.request_pool_options.viewitems():
 			getattr(pool, k) # to somewhat protect against typos
 			setattr(pool, k, v)
@@ -152,6 +172,9 @@ class txSkyDrive(api_v5.SkyDriveAPIWrapper):
 	@defer.inlineCallbacks
 	def request( self, url, method='get', data=None,
 			files=None, raw=False, headers=dict(), raise_for=dict() ):
+		if self.debug_requests:
+			log.debug(( 'HTTP request: {} {} (h: {}, data: {}, files: {}),'
+				' raw: {}' ).format(method, url[:100], headers, data, files, raw))
 		method, body = method.lower(), None
 		headers = dict() if not headers else headers.copy()
 		headers.setdefault('User-Agent', 'txSkyDrive')
@@ -168,9 +191,10 @@ class txSkyDrive(api_v5.SkyDriveAPIWrapper):
 		if files is not None:
 			boundary = os.urandom(16).encode('hex')
 			headers.setdefault('Content-Type', 'multipart/form-data; boundary={}'.format(boundary))
-			body = MultipartDataSender(files)
+			body = MultipartDataSender(files, boundary)
 
 		if isinstance(url, unicode): url = url.encode('utf-8')
+		if isinstance(method, unicode): method = method.encode('ascii')
 
 		code = None
 		try:
@@ -178,8 +202,11 @@ class txSkyDrive(api_v5.SkyDriveAPIWrapper):
 				method.upper(), url,
 				Headers(dict((k,[v]) for k,v in (headers or dict()).viewitems())), body )
 			code = res.code
+			if self.debug_requests:
+				log.debug( 'HTTP request done ({} {}): {} {} {}'\
+					.format(method, url[:100], code, res.phrase, res.version) )
 			if code != http.OK: raise api_v5.ProtocolError('{} {}'.format(code, res.phrase))
-			if code == http.NO_CONTENT: return
+			if code == http.NO_CONTENT: defer.returnValue(None)
 
 			body = defer.Deferred()
 			res.deliverBody(DataReceiver(body))
@@ -188,6 +215,33 @@ class txSkyDrive(api_v5.SkyDriveAPIWrapper):
 
 		except api_v5.ProtocolError as err:
 			raise raise_for.get(code, api_v5.ProtocolError)(err.message, code)
+
+
+	@defer.inlineCallbacks
+	def __call__( self, url='me/skydrive', query=dict(),
+			query_filter=True, auth_header=False,
+			auto_refresh_token=True, **request_kwz ):
+		'''Make an arbitrary call to LiveConnect API.
+			Shouldn't be used directly under most circumstances.'''
+		if query_filter:
+			query = dict( (k,v) for k,v in
+				query.viewitems() if v is not None )
+		if auth_header:
+			request_kwz.setdefault('headers', dict())\
+				['Authorization'] = 'Bearer {}'.format(self.auth_access_token)
+		kwz = request_kwz.copy()
+		kwz.setdefault('raise_for', dict())[401] = api_v5.AuthenticationError
+		api_url = ft.partial( self._api_url,
+			url, query, pass_access_token=not auth_header )
+		try: res = yield self.request(api_url(), **kwz)
+		except api_v5.AuthenticationError:
+			if not auto_refresh_token: raise
+			yield self.auth_get_token()
+			if auth_header: # update auth header with a new token
+				request_kwz['headers']['Authorization']\
+					= 'Bearer {}'.format(self.auth_access_token)
+			res = yield self.request(api_url(), **request_kwz)
+		defer.returnValue(res)
 
 
 	@defer.inlineCallbacks
@@ -202,15 +256,38 @@ if __name__ == '__main__':
 	logging.basicConfig(level=logging.DEBUG)
 	log.PythonLoggingObserver().start()
 
+
 	from skydrive.conf import ConfigMixin
 
 	class txSkyDriveTest(txSkyDrive, ConfigMixin):
-		def sync(self): return
+		# api_url_base = 'http://127.0.0.1:8080/test/'
+
+		@ft.wraps(txSkyDrive.auth_get_token)
+		def auth_get_token(self, *argz, **kwz):
+			d = defer.maybeDeferred(super(
+				txSkyDriveTest, self ).auth_get_token, *argz, **kwz)
+			d.addCallback(lambda ret: [self.sync(), ret][1])
+			return d
+
+		def __del__(self): self.sync()
+
 
 	@defer.inlineCallbacks
 	def test():
-		api = yield txSkyDriveTest.from_conf()
-		print (yield api.listdir())
+		api = txSkyDriveTest.from_conf()
+
+		# print (yield api.listdir())
+		# print (yield api.put('test.jpg'))
+		# print (yield api.put('test.jpg'))
+
+		# from twisted.web._newclient import RequestGenerationFailed
+		# try: res = yield api.put('test.jpg')
+		# except Exception as err:
+		# 	if isinstance(err, RequestGenerationFailed):
+		# 		err[0][0].raiseException()
+		# 	raise
+		# print 'SUCCESS', res
+
 		reactor.stop()
 
 	test()
