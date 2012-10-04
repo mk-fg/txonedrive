@@ -10,12 +10,11 @@ from zope.interface import implements
 
 from twisted.web.iweb import IBodyProducer, UNKNOWN_LENGTH
 from twisted.web.client import Agent, RedirectAgent,\
-	HTTPConnectionPool, ContentDecoderAgent, GzipDecoder,\
-	FileBodyProducer
+	HTTPConnectionPool, HTTP11ClientProtocol, ContentDecoderAgent,\
+	GzipDecoder, FileBodyProducer
 from twisted.web.http_headers import Headers
 from twisted.web import http
-from twisted.internet.protocol import Protocol
-from twisted.internet import defer, reactor, ssl, task
+from twisted.internet import defer, reactor, ssl, task, protocol
 
 from skydrive import api_v5
 
@@ -28,7 +27,7 @@ for lvl in 'debug', 'info', ('warning', 'warn'), 'error', ('critical', 'fatal'):
 
 
 
-class DataReceiver(Protocol):
+class DataReceiver(protocol.Protocol):
 
 	def __init__(self, done):
 		self.done, self.data = done, list()
@@ -49,8 +48,16 @@ class MultipartDataSender(object):
 
 	def __init__(self, fields, boundary):
 		self.fields, self.boundary = fields, boundary
-		self.length = UNKNOWN_LENGTH
 		self.task = None
+
+		## "Transfer-Encoding: chunked" doesn't work with SkyDrive,
+		##  so calculate_length() must be called to replace it with some value
+		self.length = UNKNOWN_LENGTH
+
+	def calculate_length(self):
+		d = self.send_form()
+		d.addCallback(lambda length: setattr(self, 'length', length))
+		return d
 
 	@defer.inlineCallbacks
 	def upload_file(self, src, dst):
@@ -62,7 +69,10 @@ class MultipartDataSender(object):
 		finally: src.close()
 
 	@defer.inlineCallbacks
-	def send_form(self, dst):
+	def send_form(self, dst=None):
+		dry_run = not dst
+		if dry_run: dst, dst_ext = io.BytesIO(), 0
+
 		for name, data in self.fields.viewitems():
 			dst.write(b'--{}\r\n'.format(self.boundary))
 
@@ -79,12 +89,14 @@ class MultipartDataSender(object):
 			dst.write(b'Content-Type: {}\r\n\r\n'.format(ct))
 
 			if isinstance(data, types.StringTypes): dst.write(data)
-			else: yield self.upload_file(data, dst)
+			elif not dry_run: yield self.upload_file(data, dst)
+			else: dst_ext += os.fstat(data.fileno()).st_size
 			dst.write(b'\r\n')
 
 		dst.write(b'--{}--\r\n'.format(self.boundary))
 
-		self.task = None # done
+		if dry_run: defer.returnValue(dst_ext + len(dst.getvalue()))
+		else: self.task = None
 
 	def startProducing(self, dst):
 		if not self.task: self.task = self.send_form(dst)
@@ -133,8 +145,19 @@ class TLSContextFactory(ssl.CertificateOptions):
 		return super(TLSContextFactory, self).getContext()
 
 
+class QuietHTTP11ClientFactory(protocol.Factory):
+	noisy = False
+	def __init__(self, quiescentCallback):
+		self._quiescentCallback = quiescentCallback
+	def buildProtocol(self, addr):
+		return HTTP11ClientProtocol(self._quiescentCallback)
 
-class txSkyDrive(api_v5.SkyDriveAPIWrapper):
+class QuietHTTPConnectionPool(HTTPConnectionPool):
+	_factory = QuietHTTP11ClientFactory
+
+
+
+class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
 	'SkyDrive API client.'
 
 	#: Options to twisted.web.client.HTTPConnectionPool
@@ -151,15 +174,15 @@ class txSkyDrive(api_v5.SkyDriveAPIWrapper):
 
 
 	def __init__(self, *argz, **kwz):
-		super(txSkyDrive, self).__init__(*argz, **kwz)
+		super(txSkyDriveAPI, self).__init__(*argz, **kwz)
 
-		pool = HTTPConnectionPool(reactor, persistent=True)
+		pool = QuietHTTPConnectionPool(reactor, persistent=True)
 		for k, v in self.request_pool_options.viewitems():
 			getattr(pool, k) # to somewhat protect against typos
 			setattr(pool, k, v)
 
 		self.request_agent = ContentDecoderAgent(RedirectAgent(Agent(
-			reactor, TLSContextFactory(self.ca_certs_files) )), [('gzip', GzipDecoder)])
+			reactor, TLSContextFactory(self.ca_certs_files), pool=pool )), [('gzip', GzipDecoder)])
 
 
 	@defer.inlineCallbacks
@@ -185,6 +208,7 @@ class txSkyDrive(api_v5.SkyDriveAPIWrapper):
 			boundary = os.urandom(16).encode('hex')
 			headers.setdefault('Content-Type', 'multipart/form-data; boundary={}'.format(boundary))
 			body = MultipartDataSender(files, boundary)
+			yield body.calculate_length()
 
 		if isinstance(url, unicode): url = url.encode('utf-8')
 		if isinstance(method, unicode): method = method.encode('ascii')
@@ -198,8 +222,9 @@ class txSkyDrive(api_v5.SkyDriveAPIWrapper):
 			if self.debug_requests:
 				log.debug( 'HTTP request done ({} {}): {} {} {}'\
 					.format(method, url[:100], code, res.phrase, res.version) )
-			if code != http.OK: raise api_v5.ProtocolError('{} {}'.format(code, res.phrase))
 			if code == http.NO_CONTENT: defer.returnValue(None)
+			if code not in [http.OK, http.CREATED]:
+				raise api_v5.ProtocolError('{} {}'.format(code, res.phrase))
 
 			body = defer.Deferred()
 			res.deliverBody(DataReceiver(body))
@@ -245,6 +270,72 @@ class txSkyDrive(api_v5.SkyDriveAPIWrapper):
 
 
 
+class txSkyDrive(txSkyDriveAPI):
+	'More biased SkyDrive interface with some convenience methods.'
+
+	@defer.inlineCallbacks
+	def resolve_path( self, path,
+			root_id='me/skydrive', objects=False ):
+		'''Return id (or metadata) of an object, specified by chain
+				(iterable or fs-style path string) of "name" attributes of it's ancestors,
+				or raises DoesNotExists error.
+			Requires a lot of calls to resolve each name in path, so use with care.
+			root_id parameter allows to specify path
+				 relative to some folder_id (default: me/skydrive).'''
+		if path:
+			if isinstance(path, types.StringTypes):
+				if not path.startswith('me/skydrive'):
+					path = filter(None, path.split(os.sep))
+				else: root_id, path = path, None
+			if path:
+				try:
+					for name in path:
+						root_id = dict(it.imap(
+							op.itemgetter('name', 'id'), (yield self.listdir(root_id)) ))[name]
+				except (KeyError, api_v5.ProtocolError) as err:
+					if isinstance(err, api_v5.ProtocolError) and err.code != 404: raise
+					raise api_v5.DoesNotExists(root_id, name)
+		defer.returnValue(root_id if not objects else (yield self.info(root_id)))
+
+	@defer.inlineCallbacks
+	def listdir(self, folder_id='me/skydrive', type_filter=None, limit=None):
+		'''Return a list of objects in the specified folder_id.
+			limit is passed to the API, so might be used as optimization.
+			type_filter can be set to type (str) or sequence
+				of object types to return, post-api-call processing.'''
+		lst = ( yield super(txSkyDrive, self)\
+			.listdir(folder_id=folder_id, limit=limit) )['data']
+		if type_filter:
+			if isinstance(type_filter, types.StringTypes): type_filter = {type_filter}
+			lst = list(obj for obj in lst if obj['type'] in type_filter)
+		defer.returnValue(lst)
+
+	@defer.inlineCallbacks
+	def get_quota(self):
+		'Return tuple of (bytes_available, bytes_quota).'
+		defer.returnValue(
+			op.itemgetter('available', 'quota')\
+				((yield super(SkyDriveAPI, self).get_quota())) )
+
+	@defer.inlineCallbacks
+	def copy(self, obj_id, folder_id, move=False):
+		'''Copy specified file (object) to a folder.
+			Note that folders cannot be copied, this is API limitation.'''
+		if folder_id.startswith('me/skydrive'):
+			log.info("Special folder names (like 'me/skydrive') don't"
+				" seem to work with copy/move operations, resolving it to id")
+			folder_id = yield self.info(folder_id)['id']
+		defer.returnValue((
+			yield super(SkyDriveAPI, self).copy(obj_id, folder_id, move=move) ))
+
+	@defer.inlineCallbacks
+	def comments(self, obj_id):
+		'Get a list of comments (message + metadata) for an object.'
+		defer.returnValue(
+			(yield super(SkyDriveAPI, self).comments(obj_id))['data'] )
+
+
+
 if __name__ == '__main__':
 	logging.basicConfig(level=logging.DEBUG)
 	log.PythonLoggingObserver().start()
@@ -253,7 +344,6 @@ if __name__ == '__main__':
 	from skydrive.conf import ConfigMixin
 
 	class txSkyDriveTest(txSkyDrive, ConfigMixin):
-		# api_url_base = 'http://127.0.0.1:8080/test/'
 
 		@ft.wraps(txSkyDrive.auth_get_token)
 		def auth_get_token(self, *argz, **kwz):
@@ -269,19 +359,20 @@ if __name__ == '__main__':
 	def test():
 		api = txSkyDriveTest.from_conf()
 
-		# print (yield api.listdir())
-		# print (yield api.put('test.jpg'))
-		# print (yield api.put('test.jpg'))
+		print map(op.itemgetter('name'), (yield api.listdir()))
 
-		# from twisted.web._newclient import RequestGenerationFailed
-		# try: res = yield api.put('test.jpg')
-		# except Exception as err:
-		# 	if isinstance(err, RequestGenerationFailed):
-		# 		err[0][0].raiseException()
-		# 	raise
-		# print 'SUCCESS', res
+		try: file_id = yield api.resolve_path('README.md')
+		except api_v5.DoesNotExists: print 'File not found'
+		else: api.delete(file_id)
+
+		from twisted.web._newclient import RequestGenerationFailed, ResponseFailed
+		try: res = yield api.put('README.md')
+		except (RequestGenerationFailed, ResponseFailed) as err:
+			err[0][0].raiseException()
+		print 'Uploaded:', res
 
 		reactor.stop()
+
 
 	test()
 	reactor.run()
