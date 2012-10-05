@@ -16,6 +16,8 @@ from twisted.web.http_headers import Headers
 from twisted.web import http
 from twisted.internet import defer, reactor, ssl, task, protocol
 
+from skydrive.api_v5 import SkyDriveInteractionError,\
+	ProtocolError, AuthenticationError, DoesNotExists
 from skydrive import api_v5, conf
 
 from twisted.python import log
@@ -114,12 +116,6 @@ class MultipartDataSender(object):
 		if not self.task: return
 		self.task.cancel()
 		self.task = None
-
-
-
-class LCVolatileCredentials(object):
-	def __init__(self):
-		raise NotImplementedError()
 
 
 
@@ -224,15 +220,15 @@ class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
 					.format(method, url[:100], code, res.phrase, res.version) )
 			if code == http.NO_CONTENT: defer.returnValue(None)
 			if code not in [http.OK, http.CREATED]:
-				raise api_v5.ProtocolError('{} {}'.format(code, res.phrase))
+				raise ProtocolError('{} {}'.format(code, res.phrase))
 
 			body = defer.Deferred()
 			res.deliverBody(DataReceiver(body))
 			body = yield body
 			defer.returnValue(json.loads(body) if not raw else body)
 
-		except api_v5.ProtocolError as err:
-			raise raise_for.get(code, api_v5.ProtocolError)(err.message, code)
+		except ProtocolError as err:
+			raise raise_for.get(code, ProtocolError)(err.message, code)
 
 
 	@defer.inlineCallbacks
@@ -248,11 +244,11 @@ class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
 			request_kwz.setdefault('headers', dict())\
 				['Authorization'] = 'Bearer {}'.format(self.auth_access_token)
 		kwz = request_kwz.copy()
-		kwz.setdefault('raise_for', dict())[401] = api_v5.AuthenticationError
+		kwz.setdefault('raise_for', dict())[401] = AuthenticationError
 		api_url = ft.partial( self._api_url,
 			url, query, pass_access_token=not auth_header )
 		try: res = yield self.request(api_url(), **kwz)
-		except api_v5.AuthenticationError:
+		except AuthenticationError:
 			if not auto_refresh_token: raise
 			yield self.auth_get_token()
 			if auth_header: # update auth header with a new token
@@ -292,9 +288,9 @@ class txSkyDrive(txSkyDriveAPI):
 					for name in path:
 						root_id = dict(it.imap(
 							op.itemgetter('name', 'id'), (yield self.listdir(root_id)) ))[name]
-				except (KeyError, api_v5.ProtocolError) as err:
-					if isinstance(err, api_v5.ProtocolError) and err.code != 404: raise
-					raise api_v5.DoesNotExists(root_id, name)
+				except (KeyError, ProtocolError) as err:
+					if isinstance(err, ProtocolError) and err.code != 404: raise
+					raise DoesNotExists(root_id, name)
 		defer.returnValue(root_id if not objects else (yield self.info(root_id)))
 
 	@defer.inlineCallbacks
@@ -336,7 +332,35 @@ class txSkyDrive(txSkyDriveAPI):
 
 
 
-class txSkyDriveAPIPersistent(txSkyDrive, conf.ConfigMixin):
+class txSkyDrivePersistent(txSkyDrive, conf.ConfigMixin):
+
+	@ft.wraps(txSkyDrive.auth_get_token)
+	def auth_get_token(self, *argz, **kwz):
+		d = defer.maybeDeferred(super(
+			txSkyDriveAPIPersistent, self ).auth_get_token, *argz, **kwz)
+		d.addCallback(lambda ret: [self.sync(), ret][1])
+		return d
+
+	def __del__(self): self.sync()
+
+
+class txSkyDrivePluggableSync(txSkyDrive):
+
+	config_update_keys = ['auth_access_token', 'auth_refresh_token']
+
+	#: Should be set on init or overidden in subclass
+	config_update_callback = None
+
+	def __init__(self, *argz, **kwz):
+		super(txSkyDrivePluggableSync, self).__init__(*argz, **kwz)
+		if not self.config_update_callback:
+			raise TypeError('config_update_callback must be set')
+
+	def sync(self):
+		if not self.config_update_callback:
+			raise TypeError('config_update_callback must be set')
+		self.config_update_callback(**dict(
+			(k, geattr(self, v)) for k in self.config_update_keys ))
 
 	@ft.wraps(txSkyDrive.auth_get_token)
 	def auth_get_token(self, *argz, **kwz):
@@ -361,7 +385,7 @@ if __name__ == '__main__':
 		print map(op.itemgetter('name'), (yield api.listdir()))
 
 		try: file_id = yield api.resolve_path('README.md')
-		except api_v5.DoesNotExists: print 'File not found'
+		except DoesNotExists: print 'File not found'
 		else: api.delete(file_id)
 
 		from twisted.web._newclient import RequestGenerationFailed, ResponseFailed

@@ -24,11 +24,11 @@ Following script will print listing of the root SkyDrive folder, upload
 it.
 
 	from twisted.internet import defer, reactor
-	from txskydrive import txSkyDriveAPIPersistent
+	from txskydrive import txSkyDrivePersistent
 
 	@defer.inlineCallbacks
 	def do_stuff():
-		api = txSkyDriveAPIPersistent.from_conf()
+		api = txSkyDrivePersistent.from_conf()
 
 		# Print root directory ("me/skydrive") listing
 		print (e['name'] for e in (yield api.listdir()))
