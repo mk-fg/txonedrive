@@ -285,12 +285,12 @@ class txSkyDrive(txSkyDriveAPI):
 				else: root_id, path = path, None
 			if path:
 				try:
-					for name in path:
+					for i, name in enumerate(path):
 						root_id = dict(it.imap(
 							op.itemgetter('name', 'id'), (yield self.listdir(root_id)) ))[name]
 				except (KeyError, ProtocolError) as err:
 					if isinstance(err, ProtocolError) and err.code != 404: raise
-					raise DoesNotExists(root_id, name)
+					raise DoesNotExists(root_id, path[i:])
 		defer.returnValue(root_id if not objects else (yield self.info(root_id)))
 
 	@defer.inlineCallbacks
@@ -337,7 +337,7 @@ class txSkyDrivePersistent(txSkyDrive, conf.ConfigMixin):
 	@ft.wraps(txSkyDrive.auth_get_token)
 	def auth_get_token(self, *argz, **kwz):
 		d = defer.maybeDeferred(super(
-			txSkyDriveAPIPersistent, self ).auth_get_token, *argz, **kwz)
+			txSkyDrivePersistent, self ).auth_get_token, *argz, **kwz)
 		d.addCallback(lambda ret: [self.sync(), ret][1])
 		return d
 
@@ -360,12 +360,12 @@ class txSkyDrivePluggableSync(txSkyDrive):
 		if not self.config_update_callback:
 			raise TypeError('config_update_callback must be set')
 		self.config_update_callback(**dict(
-			(k, geattr(self, v)) for k in self.config_update_keys ))
+			(k, getattr(self, k)) for k in self.config_update_keys ))
 
 	@ft.wraps(txSkyDrive.auth_get_token)
 	def auth_get_token(self, *argz, **kwz):
 		d = defer.maybeDeferred(super(
-			txSkyDriveAPIPersistent, self ).auth_get_token, *argz, **kwz)
+			txSkyDrivePluggableSync, self ).auth_get_token, *argz, **kwz)
 		d.addCallback(lambda ret: [self.sync(), ret][1])
 		return d
 
