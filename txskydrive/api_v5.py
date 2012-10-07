@@ -220,7 +220,7 @@ class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
 					.format(method, url[:100], code, res.phrase, res.version) )
 			if code == http.NO_CONTENT: defer.returnValue(None)
 			if code not in [http.OK, http.CREATED]:
-				raise ProtocolError('{} {}'.format(code, res.phrase))
+				raise ProtocolError(code, res.phrase)
 
 			body = defer.Deferred()
 			res.deliverBody(DataReceiver(body))
@@ -228,7 +228,7 @@ class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
 			defer.returnValue(json.loads(body) if not raw else body)
 
 		except ProtocolError as err:
-			raise raise_for.get(code, ProtocolError)(err.message, code)
+			raise raise_for.get(code, ProtocolError)(code, err.message)
 
 
 	@defer.inlineCallbacks
