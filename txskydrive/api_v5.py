@@ -20,12 +20,13 @@ from skydrive.api_v5 import SkyDriveInteractionError,\
 	ProtocolError, AuthenticationError, DoesNotExists
 from skydrive import api_v5, conf
 
-from twisted.python import log
+from twisted.python import log as twisted_log
+
+class log(object): pass # proxy object, emulating python logger
 for lvl in 'debug', 'info', ('warning', 'warn'), 'error', ('critical', 'fatal'):
 	lvl, func = lvl if isinstance(lvl, tuple) else (lvl, lvl)
-	assert not getattr(log, lvl, False)
-	setattr(log, func, ft.partial( log.msg,
-		logLevel=logging.getLevelName(lvl.upper()) ))
+	setattr(log, func, staticmethod(ft.partial(
+		twisted_log.msg, logLevel=logging.getLevelName(lvl.upper()) )))
 
 
 
@@ -376,11 +377,11 @@ class txSkyDrivePluggableSync(txSkyDrive):
 
 if __name__ == '__main__':
 	logging.basicConfig(level=logging.DEBUG)
-	log.PythonLoggingObserver().start()
+	twisted_log.PythonLoggingObserver().start()
 
 	@defer.inlineCallbacks
 	def test():
-		api = txSkyDriveAPIPersistent.from_conf()
+		api = txSkyDrivePersistent.from_conf()
 
 		print map(op.itemgetter('name'), (yield api.listdir()))
 
