@@ -197,7 +197,6 @@ class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
 				headers.setdefault('Content-Type', 'application/x-www-form-urlencoded')
 				body = FileBodyProducer(io.BytesIO(urlencode(data)))
 			else:
-				headers = headers.copy()
 				headers.setdefault('Content-Type', 'application/json')
 				body = FileBodyProducer(io.BytesIO(urlencode(json.dumps(data))))
 
