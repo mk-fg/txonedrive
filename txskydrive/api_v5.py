@@ -186,8 +186,9 @@ class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
 	def request( self, url, method='get', data=None,
 			files=None, raw=False, headers=dict(), raise_for=dict() ):
 		if self.debug_requests:
+			url_debug = url[:100] + ('' if len(url) < 100 else '...')
 			log.debug(( 'HTTP request: {} {} (h: {}, data: {}, files: {}),'
-				' raw: {}' ).format(method, url[:100], headers, data, files, raw))
+				' raw: {}' ).format(method, url_debug, headers, data, files, raw))
 		method, body = method.lower(), None
 		headers = dict() if not headers else headers.copy()
 		headers.setdefault('User-Agent', 'txSkyDrive')
@@ -217,7 +218,7 @@ class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
 			code = res.code
 			if self.debug_requests:
 				log.debug( 'HTTP request done ({} {}): {} {} {}'\
-					.format(method, url[:100], code, res.phrase, res.version) )
+					.format(method, url_debug, code, res.phrase, res.version) )
 			if code == http.NO_CONTENT: defer.returnValue(None)
 			if code not in [http.OK, http.CREATED]:
 				raise ProtocolError(code, res.phrase)
