@@ -94,6 +94,8 @@ installs into custom paths.
 
 ### Requirements
 
-* [Python 2.7 (not 3.X)](http://python.org/)
+* [Python 2.7 (not 3.X)](http://python.org)
+
+* [Twisted](http://twistedmatrix.com) (core components)
 
 * [python-skydrive](https://github.com/mk-fg/python-skydrive)
