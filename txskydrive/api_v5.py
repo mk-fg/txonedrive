@@ -217,9 +217,6 @@ class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
 				method.upper(), url,
 				Headers(dict((k,[v]) for k,v in (headers or dict()).viewitems())), body )
 			code = res.code
-			if self.debug_requests:
-				log.debug( 'HTTP request done ({} {}): {} {} {}'\
-					.format(method, url_debug, code, res.phrase, res.version) )
 			if code == http.NO_CONTENT: defer.returnValue(None)
 			if code not in [http.OK, http.CREATED]:
 				raise ProtocolError(code, res.phrase)
@@ -227,6 +224,9 @@ class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
 			body = defer.Deferred()
 			res.deliverBody(DataReceiver(body))
 			body = yield body
+			if self.debug_requests:
+				log.debug( 'HTTP request done ({} {}): {} {} {}, body_len: {}'\
+					.format(method, url_debug, code, res.phrase, res.version, len(body)) )
 			defer.returnValue(json.loads(body) if not raw else body)
 
 		except ProtocolError as err:
