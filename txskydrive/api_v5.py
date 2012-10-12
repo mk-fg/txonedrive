@@ -159,6 +159,7 @@ class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
 
 	#: Options to twisted.web.client.HTTPConnectionPool
 	request_pool_options = dict(
+		persistent=True,
 		maxPersistentPerHost=10,
 		cachedConnectionTimeout=600,
 		retryAutomatically=True )
@@ -173,7 +174,7 @@ class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
 	def __init__(self, *argz, **kwz):
 		super(txSkyDriveAPI, self).__init__(*argz, **kwz)
 
-		pool = QuietHTTPConnectionPool(reactor, persistent=True)
+		pool = QuietHTTPConnectionPool(reactor)
 		for k, v in self.request_pool_options.viewitems():
 			getattr(pool, k) # to somewhat protect against typos
 			setattr(pool, k, v)
@@ -229,6 +230,10 @@ class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
 			defer.returnValue(json.loads(body) if not raw else body)
 
 		except ProtocolError as err:
+			if self.debug_requests:
+				log.debug(
+					'HTTP request handling error ({} {}, code: {}): {}'\
+					.format(method, url_debug, code, err.message) )
 			raise raise_for.get(code, ProtocolError)(code, err.message)
 
 
