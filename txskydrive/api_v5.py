@@ -174,7 +174,7 @@ class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
 	def __init__(self, *argz, **kwz):
 		super(txSkyDriveAPI, self).__init__(*argz, **kwz)
 
-		pool = QuietHTTPConnectionPool(reactor)
+		pool = self.request_pool = QuietHTTPConnectionPool(reactor)
 		for k, v in self.request_pool_options.viewitems():
 			getattr(pool, k) # to somewhat protect against typos
 			setattr(pool, k, v)
@@ -260,6 +260,9 @@ class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
 			if auth_header: # update auth header with a new token
 				request_kwz['headers']['Authorization']\
 					= 'Bearer {}'.format(self.auth_access_token)
+			# Existing connections seem to hang occasionally after token updates,
+			#  though it looks like a twisted issue, since they hang forever (no timeouts in place)
+			self.request_pool.closeCachedConnections()
 			res = yield self.request(api_url(), **request_kwz)
 		defer.returnValue(res)
 
