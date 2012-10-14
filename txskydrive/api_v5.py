@@ -9,12 +9,16 @@ from OpenSSL import crypto
 from zope.interface import implements
 
 from twisted.web.iweb import IBodyProducer, UNKNOWN_LENGTH
-from twisted.web.client import Agent, RedirectAgent,\
-	HTTPConnectionPool, HTTP11ClientProtocol, ContentDecoderAgent,\
-	GzipDecoder, FileBodyProducer
 from twisted.web.http_headers import Headers
 from twisted.web import http
 from twisted.internet import defer, reactor, ssl, task, protocol
+
+from twisted.web.client import Agent, RedirectAgent,\
+	HTTPConnectionPool, HTTP11ClientProtocol, ContentDecoderAgent,\
+	GzipDecoder, FileBodyProducer
+from twisted.web.client import ResponseFailed,\
+	RequestNotSent, RequestTransmissionFailed
+# Maybe handle RequestGenerationFailed as UnderlyingProtocolError well?
 
 from skydrive.api_v5 import SkyDriveInteractionError,\
 	ProtocolError, AuthenticationError, DoesNotExists
@@ -28,6 +32,16 @@ for lvl in 'debug', 'info', ('warning', 'warn'), 'error', ('critical', 'fatal'):
 	setattr(log, func, staticmethod(ft.partial(
 		twisted_log.msg, logLevel=logging.getLevelName(lvl.upper()) )))
 
+
+
+class UnderlyingProtocolError(ProtocolError):
+	'Raised for e.g. ResponseFailed non-HTTP errors from HTTP client.'
+
+	def __init__(self, err):
+		# Set http-503, to allow handling of it similar way for http-oriented code
+		super(UnderlyingProtocolError, self)\
+			.__init__(http.SERVICE_UNAVAILABLE, err.message)
+		self.error = err
 
 
 class DataReceiver(protocol.Protocol):
@@ -228,6 +242,13 @@ class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
 				log.debug( 'HTTP request done ({} {}): {} {} {}, body_len: {}'\
 					.format(method, url_debug, code, res.phrase, res.version, len(body)) )
 			defer.returnValue(json.loads(body) if not raw else body)
+
+		except (ResponseFailed, RequestNotSent, RequestTransmissionFailed) as err:
+			if self.debug_requests:
+				log.debug(
+					'HTTP transport (underlying protocol) error ({} {}): {}'\
+					.format(method, url_debug, err.message) )
+			raise UnderlyingProtocolError(err)
 
 		except ProtocolError as err:
 			if self.debug_requests:
