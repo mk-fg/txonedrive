@@ -96,6 +96,6 @@ installs into custom paths.
 
 * [Python 2.7 (not 3.X)](http://python.org)
 
-* [Twisted](http://twistedmatrix.com) (core, web)
+* [Twisted](http://twistedmatrix.com) (core, web, at least 12.2.0)
 
 * [python-skydrive](https://github.com/mk-fg/python-skydrive)

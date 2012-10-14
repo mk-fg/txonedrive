@@ -12,7 +12,7 @@ except IOError: readme = ''
 setup(
 
 	name = 'txSkyDrive', # just trying to mimic tx* naming convention
-	version = '12.10.19',
+	version = '12.10.20',
 	author = 'Mike Kazantsev',
 	author_email = 'mk.fraggod@gmail.com',
 	license = 'WTFPL',
@@ -39,7 +39,7 @@ setup(
 		'Topic :: System :: Archiving',
 		'Topic :: System :: Filesystems' ],
 
-	install_requires = ['Twisted', 'python-skydrive >= 12.10.5'],
+	install_requires = ['Twisted >= 12.2.0', 'python-skydrive >= 12.10.5'],
 
 	packages = find_packages(),
 	include_package_data = True,
