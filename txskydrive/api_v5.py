@@ -56,7 +56,6 @@ class DataReceiver(protocol.Protocol):
 		self.data.append(chunk)
 
 	def connectionLost(self, reason):
-		# reason.getErrorMessage()
 		self.done.callback(b''.join(self.data))
 
 
@@ -70,8 +69,8 @@ class MultipartDataSender(object):
 		self.fields, self.boundary = fields, boundary
 		self.task = None
 
-		## "Transfer-Encoding: chunked" doesn't work with SkyDrive,
-		##  so calculate_length() must be called to replace it with some value
+		# "Transfer-Encoding: chunked" doesn't work with SkyDrive,
+		#  so calculate_length() must be called to replace it with some value
 		self.length = UNKNOWN_LENGTH
 
 	def calculate_length(self):
@@ -187,7 +186,7 @@ class SnappyHTTP11ClientFactory(protocol.Factory):
 		p = self.protocol(self._quiescentCallback)
 		p.factory = self
 
-		# XXX: This is bad, but timeouts don't seem to be implemented otherwise
+		# XXX: This is bad, but i/o timeouts don't seem to be implemented otherwise
 		# It's easier to implement them on transport-level, but it doesn't make
 		#  much sense with persistent connections (which are supposed to hang idly).
 		self.timeout_watch(p)
@@ -206,7 +205,6 @@ class SnappyHTTP11ClientFactory(protocol.Factory):
 				if self.debug_requests:
 					log.debug('Detected i/o timeout on protocol instance: {}'.format(p))
 				p.abort()
-				# p._giveUp(IOTimeout('I/O activity timeout: {}'.format(self.io_timeout)))
 
 	def timeout_watch(self, p):
 		if self.debug_requests:
@@ -221,7 +219,7 @@ class SnappyHTTP11ClientFactory(protocol.Factory):
 
 			# Add timeouts between request write operations to a transport
 			def write_to(self, transport, _forward=request.writeTo):
-				# XXX: more proper way would be to wrap transport, but it'd take a shitload of code
+				# XXX: more proper way would be to wrap transport, but it'd take a proxy class
 				def write(self, data, _forward=transport.write):
 					p._io_ts = time()
 					return _forward(data)
