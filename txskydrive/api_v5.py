@@ -5,7 +5,7 @@ from urllib import urlencode
 from mimetypes import guess_type
 from time import time
 from collections import Mapping
-import os, sys, io, re, types, weakref, json, logging
+import os, sys, io, re, types, weakref, logging
 
 from OpenSSL import crypto
 from zope.interface import implements
@@ -34,9 +34,12 @@ for lvl in 'debug', 'info', ('warning', 'warn'), 'error', ('critical', 'fatal'):
 	setattr(log, func, staticmethod(ft.partial(
 		twisted_log.msg, logLevel=logging.getLevelName(lvl.upper()) )))
 
+try: import anyjson as json
+except ImportError:
+	try: import simplejson as json
+	except ImportError: import json
 
 
-# class IOTimeout(RuntimeError): pass
 
 class UnderlyingProtocolError(ProtocolError):
 	'Raised for e.g. ResponseFailed non-HTTP errors from HTTP client.'
@@ -164,97 +167,22 @@ class SnappyHTTP11ClientFactory(protocol.Factory):
 	noisy = False
 	protocol = HTTP11ClientProtocol
 
-	#: Max timeout between high-level read/write operations to tolerate.
-	io_timeout = 30
-
 	debug_requests = False
 
-	def __init__(self, quiescentCallback, debug_requests=False, io_timeout=None):
+	def __init__(self, quiescentCallback, debug_requests=False):
 		self._quiescentCallback = quiescentCallback
 		self.debug_requests = debug_requests
 
-		self._io_watch = weakref.WeakKeyDictionary()
-		if io_timeout is not None: self.io_timeout = io_timeout
-		if self.io_timeout >= 0:
-			self._io_watch_task = task.LoopingCall(self.timeout_check)
-		else: self._io_watch_task = None
-
-	def __del__(self):
-		if self._io_watch_task: self._io_watch_task.stop()
-
-
 	def buildProtocol(self, addr):
-		p = self.protocol(self._quiescentCallback)
-		p.factory = self
-
-		# XXX: This is bad, but i/o timeouts don't seem to be implemented otherwise
-		# It's easier to implement them on transport-level, but it doesn't make
-		#  much sense with persistent connections (which are supposed to hang idly).
-		self.timeout_watch(p)
-		if self._io_watch_task and not self._io_watch_task.running:
-			self._io_watch_task.start(self.io_timeout, now=False)
-
-		return p
-
-
-	def timeout_check(self, obj=None):
-		if not self._io_watch:
-			return self._io_watch_task.stop()
-		ts = time()
-		for p in self._io_watch.keys():
-			if p._io_ts and (ts - p._io_ts) > self.io_timeout:
-				if self.debug_requests:
-					log.debug('Detected i/o timeout on protocol instance: {}'.format(p))
-				p.abort()
-
-	def timeout_watch(self, p):
-		if self.debug_requests:
-			log.debug( 'Adding new protocol'
-				' instance to i/o timeout watcher: {}'.format(p) )
-
-		p._io_ts = time() # this value will be checked for staleness
-		self._io_watch[p] = None
-
-		# XXX: This is monkey-patching, nothing good ever comes out of it
-		def request(self, request, _forward=p.request):
-
-			# Add timeouts between request write operations to a transport
-			def write_to(self, transport, _forward=request.writeTo):
-				# XXX: more proper way would be to wrap transport, but it'd take a proxy class
-				def write(self, data, _forward=transport.write):
-					p._io_ts = time()
-					return _forward(data)
-				transport.write = ft.partial(write, transport)
-				return _forward(transport)
-			request.writeTo = ft.partial(write_to, request)
-
-			# Initialize request processing stuff
-			res = _forward(request)
-
-			# Add timeouts between data-received callbacks
-			def data_received(self, data, _forward=self._parser.dataReceived):
-				p._io_ts = time()
-				return _forward(data)
-			self._parser.dataReceived = ft.partial(data_received, self._parser)
-
-			# Disable timeouts between separate requests
-			def finisher(self, rest, _forward=self._parser.finisher):
-				p._io_ts = None
-				return _forward(rest)
-			self._parser.finisher = ft.partial(finisher, self._parser)
-
-			return res
-
-		p.request = ft.partial(request, p)
+		return self.protocol(self._quiescentCallback)
 
 
 class SnappyHTTPConnectionPool(HTTPConnectionPool):
 	_factory = SnappyHTTP11ClientFactory
 
 	def __init__( self, reactor, persistent=True,
-			debug_requests=False, io_timeout=None, **pool_kwz ):
-		self._factory = ft.partial( self._factory,
-			debug_requests=debug_requests, io_timeout=io_timeout )
+			debug_requests=False, **pool_kwz ):
+		self._factory = ft.partial(self._factory, debug_requests=debug_requests)
 		super(SnappyHTTPConnectionPool, self).__init__(reactor, persistent=persistent)
 
 		for k, v in pool_kwz.viewitems():
@@ -268,7 +196,6 @@ class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
 	#: Options to twisted.web.client.HTTPConnectionPool
 	request_pool_options = dict(
 		persistent = True,
-		io_timeout = 30,
 		maxPersistentPerHost = 10,
 		cachedConnectionTimeout = 600,
 		retryAutomatically = True )
@@ -510,8 +437,6 @@ if __name__ == '__main__':
 	@defer.inlineCallbacks
 	def test():
 		req_pool_optz = txSkyDrivePersistent.request_pool_options.copy()
-		req_pool_optz['io_timeout'] = 4
-
 		api = txSkyDrivePersistent.from_conf(
 			debug_requests=True, request_pool_options=req_pool_optz )
 
