@@ -4,6 +4,7 @@ import itertools as it, operator as op, functools as ft
 from urllib import urlencode
 from mimetypes import guess_type
 from time import time
+from collections import Mapping
 import os, sys, io, re, types, weakref, json, logging
 
 from OpenSSL import crypto
@@ -291,9 +292,16 @@ class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
 	def request( self, url, method='get', data=None,
 			files=None, raw=False, headers=dict(), raise_for=dict() ):
 		if self.debug_requests:
-			url_debug = url[:100] + ('' if len(url) < 100 else '...')
-			log.debug(( 'HTTP request: {} {} (h: {}, data: {}, files: {}),'
-				' raw: {}' ).format(method, url_debug, headers, data, files, raw))
+			def _trunc(v, trunc_len=100):
+				if isinstance(v, Mapping):
+					return dict((k, _trunc(v)) for k,v in v.iteritems())
+				elif isinstance(v, (list, tuple)): return [_trunc(v) for v in v]
+				elif not isinstance(v, types.StringTypes): v = repr(v)
+				if len(v) > trunc_len: v = v[:trunc_len] + '...'
+				return v
+			url_debug = _trunc(url)
+			log.debug( 'HTTP request: {} {} (h: {}, data: {}, files: {}), raw: {}'\
+				.format(method, url_debug, headers, _trunc(data), _trunc(files), raw) )
 		method, body = method.lower(), None
 		headers = dict() if not headers else headers.copy()
 		headers.setdefault('User-Agent', 'txSkyDrive')
