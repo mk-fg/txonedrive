@@ -4,7 +4,7 @@ import itertools as it, operator as op, functools as ft
 from urllib import urlencode
 from mimetypes import guess_type
 from time import time
-from collections import Mapping
+from collections import Mapping, OrderedDict
 import os, sys, io, re, types, weakref, logging
 
 from OpenSSL import crypto
@@ -16,11 +16,14 @@ from twisted.web import http
 from twisted.internet import defer, reactor, ssl, task, protocol
 
 from twisted.web.client import Agent, RedirectAgent,\
-	HTTPConnectionPool, HTTP11ClientProtocol, ContentDecoderAgent,\
-	GzipDecoder, FileBodyProducer
+	HTTPConnectionPool, HTTP11ClientProtocol, ContentDecoderAgent, GzipDecoder
 from twisted.web.client import ResponseFailed,\
 	RequestNotSent, RequestTransmissionFailed
-# Maybe handle RequestGenerationFailed as UnderlyingProtocolError well?
+
+try: # doesn't seem to be a part of public api
+	from twisted.web._newclient import RequestGenerationFailed
+except ImportError: # won't be handled
+	class RequestGenerationFailed(Exception): pass
 
 from skydrive.api_v5 import SkyDriveInteractionError,\
 	ProtocolError, AuthenticationError, DoesNotExists
@@ -51,48 +54,96 @@ class UnderlyingProtocolError(ProtocolError):
 		self.error = err
 
 
+
 class DataReceiver(protocol.Protocol):
 
-	def __init__(self, done):
-		self.done, self.data = done, list()
+	def __init__(self, done, timer=None):
+		self.done, self.timer, self.data = done, timer, list()
 
 	def dataReceived(self, chunk):
+		if self.timer:
+			if not self.data: self.timer.state_next('res_body') # first chunk
+			else: self.timer.timeout_reset()
 		self.data.append(chunk)
 
 	def connectionLost(self, reason):
+		if self.timer: self.timer.state_next()
 		self.done.callback(b''.join(self.data))
 
 
-class MultipartDataSender(object):
+
+class FileBodyProducer(object):
 	implements(IBodyProducer)
+
+	_task = None
 
 	#: Single read/write size
 	chunk_size = 64 * 2**10 # 64 KiB
 
-	def __init__(self, fields, boundary):
-		self.fields, self.boundary = fields, boundary
-		self.task = None
+	def __init__(self, src, timer=None):
+		self.src, self.timer = src, timer
 
-		# "Transfer-Encoding: chunked" doesn't work with SkyDrive,
-		#  so calculate_length() must be called to replace it with some value
-		self.length = UNKNOWN_LENGTH
-
-	def calculate_length(self):
-		d = self.send_form()
-		d.addCallback(lambda length: setattr(self, 'length', length))
-		return d
+		# Set length, if possible
+		try: src.seek, src.tell
+		except AttributeError: self.length = UNKNOWN_LENGTH
+		else:
+			pos = src.tell()
+			try:
+				src.seek(0, os.SEEK_END)
+				self.length = src.tell() - pos
+			finally: src.seek(pos)
 
 	@defer.inlineCallbacks
 	def upload_file(self, src, dst):
 		try:
 			while True:
+				if self.timer: self.timer.timeout_reset()
 				chunk = src.read(self.chunk_size)
 				if not chunk: break
 				yield dst.write(chunk)
 		finally: src.close()
 
 	@defer.inlineCallbacks
-	def send_form(self, dst=None):
+	def send(self, dst):
+		res = yield self.upload_file(self.src, dst)
+		if self.timer: self.timer.state_next()
+		defer.returnValue(res)
+
+	def startProducing(self, dst):
+		if self.timer: self.timer.state_next('req_body')
+		if not self._task: self._task = self.send(dst)
+		return self._task
+
+	def resumeProducing(self):
+		if not self._task: return
+		self._task.unpause()
+
+	def pauseProducing(self):
+		if not self._task: return
+		self._task.pause()
+
+	def stopProducing(self):
+		if not self._task: return
+		self._task.cancel()
+		self._task = None
+
+
+class MultipartDataSender(FileBodyProducer):
+
+	def __init__(self, fields, boundary, timer=None):
+		self.fields, self.boundary, self.timer = fields, boundary, timer
+
+		# "Transfer-Encoding: chunked" doesn't work with SkyDrive,
+		#  so calculate_length() must be called to replace it with some value
+		self.length = UNKNOWN_LENGTH
+
+	def calculate_length(self):
+		d = self.send()
+		d.addCallback(lambda length: setattr(self, 'length', length))
+		return d
+
+	@defer.inlineCallbacks
+	def send(self, dst=None):
 		dry_run = not dst
 		if dry_run: dst, dst_ext = io.BytesIO(), 0
 
@@ -119,24 +170,9 @@ class MultipartDataSender(object):
 		dst.write(b'--{}--\r\n'.format(self.boundary))
 
 		if dry_run: defer.returnValue(dst_ext + len(dst.getvalue()))
-		else: self.task = None
-
-	def startProducing(self, dst):
-		if not self.task: self.task = self.send_form(dst)
-		return self.task
-
-	def resumeProducing(self):
-		if not self.task: return
-		self.task.unpause()
-
-	def pauseProducing(self):
-		if not self.task: return
-		self.task.pause()
-
-	def stopProducing(self):
-		if not self.task: return
-		self.task.cancel()
-		self.task = None
+		else:
+			self._task = None
+			if self.timer: self.timer.state_next()
 
 
 
@@ -162,32 +198,93 @@ class TLSContextFactory(ssl.CertificateOptions):
 		return super(TLSContextFactory, self).getContext()
 
 
-class SnappyHTTP11ClientFactory(protocol.Factory):
+class QuietHTTP11ClientFactory(protocol.Factory):
 
 	noisy = False
 	protocol = HTTP11ClientProtocol
 
-	debug_requests = False
-
-	def __init__(self, quiescentCallback, debug_requests=False):
+	def __init__(self, quiescentCallback):
 		self._quiescentCallback = quiescentCallback
-		self.debug_requests = debug_requests
 
 	def buildProtocol(self, addr):
 		return self.protocol(self._quiescentCallback)
 
 
-class SnappyHTTPConnectionPool(HTTPConnectionPool):
-	_factory = SnappyHTTP11ClientFactory
+class QuietHTTPConnectionPool(HTTPConnectionPool):
 
-	def __init__( self, reactor, persistent=True,
-			debug_requests=False, **pool_kwz ):
-		self._factory = ft.partial(self._factory, debug_requests=debug_requests)
-		super(SnappyHTTPConnectionPool, self).__init__(reactor, persistent=persistent)
+	_factory = QuietHTTP11ClientFactory
 
+	def __init__(self, reactor, persistent=True, debug_requests=False, **pool_kwz):
+		super(QuietHTTPConnectionPool, self).__init__(reactor, persistent=persistent)
 		for k, v in pool_kwz.viewitems():
 			getattr(self, k) # to somewhat protect against typos
 			setattr(self, k, v)
+
+
+
+class HTTPTimeout(defer.Deferred, object):
+
+	'''Deferred that will errback if timeout_reset() won't be called in time.
+		What "in time" means depends on current state and state_timeouts.
+		States can be switched by state_next() method.
+		Callback is invoked when the last state is passed or on state_finished() call.'''
+
+	class ActivityTimeout(Exception): pass
+
+	_state = _timeout = None
+	state_timeouts = OrderedDict([ ('req_headers', 60),
+		('req_body', 20), ('res_headers', 20), ('res_body', 20), ('res_end', 10) ])
+
+	def __init__(self, timeouts=None, **state_timeouts):
+		if timeouts:
+			assert not state_timeouts
+			self.state_timeouts = timeouts
+		elif state_timeouts:
+			for k, v in state_timeouts.viewitems():
+				assert k in self.state_timeouts
+				self.state_timeouts[k] = v
+		super(HTTPTimeout, self).__init__()
+		self._state = next(iter(self.state_timeouts))
+		self.timeout_reset()
+
+	def state_next(self, state=None):
+		if not state: # advance in order
+			states = iter(self.state_timeouts)
+			next(it.dropwhile(lambda k: k != self._state, states))
+			try: self._state = next(states)
+			except StopIteration: self.state_finished()
+		else: self._state = state
+		self.timeout_reset()
+
+	def state_finished(self):
+		if self._timeout.active(): self._timeout.cancel()
+		if not self.called: self.callback(None)
+
+	def timeout_reset(self):
+		timeout = self.state_timeouts[self._state]
+		if not self._timeout:
+			self._timeout = reactor.callLater( timeout,
+				lambda: self.errback(self.ActivityTimeout(
+					self._state, self.state_timeouts[self._state] )) )
+		self._timeout.reset(timeout)
+
+
+
+@defer.inlineCallbacks
+def first_result(*deferreds):
+	try:
+		res, idx = yield defer.DeferredList(
+			deferreds, fireOnOneCallback=True, fireOnOneErrback=True )
+	except defer.FirstError as err: err.subFailure.raiseException()
+	defer.returnValue(res)
+
+def _dump_trunc(v, trunc_len=100):
+	if isinstance(v, Mapping):
+		return dict((k, _dump_trunc(v)) for k,v in v.iteritems())
+	elif isinstance(v, (list, tuple)): return [_dump_trunc(v) for v in v]
+	elif not isinstance(v, types.StringTypes): v = repr(v)
+	if len(v) > trunc_len: v = v[:trunc_len] + '...'
+	return v
 
 
 class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
@@ -200,6 +297,11 @@ class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
 		cachedConnectionTimeout = 600,
 		retryAutomatically = True )
 
+	#: These are timeouts between individual read/write ops
+	#: Missing keys will have default values (from HTTPTimeout.state_timeouts)
+	request_io_timeouts = dict( req_headers=60,
+		req_body=20, res_headers=20, res_body=20, res_end=10 )
+
 	#: Path string or list of strings
 	ca_certs_files = b'/etc/ssl/certs/ca-certificates.crt'
 
@@ -209,7 +311,7 @@ class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
 
 	def __init__(self, *argz, **kwz):
 		super(txSkyDriveAPI, self).__init__(*argz, **kwz)
-		pool = self.request_pool = SnappyHTTPConnectionPool( reactor,
+		pool = self.request_pool = QuietHTTPConnectionPool( reactor,
 				debug_requests=self.debug_requests, **self.request_pool_options )
 		self.request_agent = ContentDecoderAgent(RedirectAgent(Agent(
 			reactor, TLSContextFactory(self.ca_certs_files), pool=pool )), [('gzip', GzipDecoder)])
@@ -219,16 +321,12 @@ class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
 	def request( self, url, method='get', data=None,
 			files=None, raw=False, headers=dict(), raise_for=dict() ):
 		if self.debug_requests:
-			def _trunc(v, trunc_len=100):
-				if isinstance(v, Mapping):
-					return dict((k, _trunc(v)) for k,v in v.iteritems())
-				elif isinstance(v, (list, tuple)): return [_trunc(v) for v in v]
-				elif not isinstance(v, types.StringTypes): v = repr(v)
-				if len(v) > trunc_len: v = v[:trunc_len] + '...'
-				return v
-			url_debug = _trunc(url)
-			log.debug( 'HTTP request: {} {} (h: {}, data: {}, files: {}), raw: {}'\
-				.format(method, url_debug, headers, _trunc(data), _trunc(files), raw) )
+			url_debug = _dump_trunc(url)
+			log.debug('HTTP request: {} {} (h: {}, data: {}, files: {}), raw: {}'.format(
+				method, url_debug, headers, _dump_trunc(data), _dump_trunc(files), raw ))
+
+		timeout = HTTPTimeout(**self.request_io_timeouts)
+
 		method, body = method.lower(), None
 		headers = dict() if not headers else headers.copy()
 		headers.setdefault('User-Agent', 'txSkyDrive')
@@ -236,15 +334,17 @@ class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
 		if data is not None:
 			if method == 'post':
 				headers.setdefault('Content-Type', 'application/x-www-form-urlencoded')
-				body = FileBodyProducer(io.BytesIO(urlencode(data)))
+				body = FileBodyProducer(io.BytesIO(urlencode(data)), timer=timeout)
 			else:
 				headers.setdefault('Content-Type', 'application/json')
-				body = FileBodyProducer(io.BytesIO(urlencode(json.dumps(data))))
+				body = FileBodyProducer(io.BytesIO(
+					urlencode(json.dumps(data)) ), timer=timeout)
 
 		if files is not None:
 			boundary = os.urandom(16).encode('hex')
-			headers.setdefault('Content-Type', 'multipart/form-data; boundary={}'.format(boundary))
-			body = MultipartDataSender(files, boundary)
+			headers.setdefault( 'Content-Type',
+				'multipart/form-data; boundary={}'.format(boundary) )
+			body = MultipartDataSender(files, boundary, timer=timeout)
 			yield body.calculate_length()
 
 		if isinstance(url, unicode): url = url.encode('utf-8')
@@ -252,23 +352,25 @@ class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
 
 		code = None
 		try:
-			res = yield self.request_agent.request(
-				method.upper(), url,
-				Headers(dict((k,[v]) for k,v in (headers or dict()).viewitems())), body )
+			res = yield first_result( timeout,
+				self.request_agent.request( method.upper(), url,
+					Headers(dict((k,[v]) for k,v in (headers or dict()).viewitems())), body ) )
 			code = res.code
 			if code == http.NO_CONTENT: defer.returnValue(None)
 			if code not in [http.OK, http.CREATED]:
 				raise ProtocolError(code, res.phrase)
 
 			body = defer.Deferred()
-			res.deliverBody(DataReceiver(body))
-			body = yield body
+			res.deliverBody(DataReceiver(body, timer=timeout))
+			body = yield first_result(timeout, body)
+
 			if self.debug_requests:
 				log.debug( 'HTTP request done ({} {}): {} {} {}, body_len: {}'\
 					.format(method, url_debug, code, res.phrase, res.version, len(body)) )
 			defer.returnValue(json.loads(body) if not raw else body)
 
-		except (ResponseFailed, RequestNotSent, RequestTransmissionFailed) as err:
+		except ( timeout.ActivityTimeout, ResponseFailed,
+				RequestNotSent, RequestTransmissionFailed ) as err:
 			if self.debug_requests:
 				log.debug(
 					'HTTP transport (underlying protocol) error ({} {}): {}'\
@@ -281,6 +383,11 @@ class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
 					'HTTP request handling error ({} {}, code: {}): {}'\
 					.format(method, url_debug, code, err.message) )
 			raise raise_for.get(code, ProtocolError)(code, err.message)
+
+		except RequestGenerationFailed as err:
+			err[0][0].raiseException()
+
+		finally: timeout.state_finished()
 
 
 	@defer.inlineCallbacks
@@ -432,7 +539,6 @@ class txSkyDrivePluggableSync(txSkyDrive):
 if __name__ == '__main__':
 	logging.basicConfig(level=logging.DEBUG)
 	twisted_log.PythonLoggingObserver().start()
-
 
 	@defer.inlineCallbacks
 	def test():
