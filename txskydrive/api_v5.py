@@ -241,7 +241,7 @@ class HTTPTimeout(defer.Deferred, object):
 			self.state_timeouts = timeouts
 		elif state_timeouts:
 			for k, v in state_timeouts.viewitems():
-				assert k in self.state_timeouts
+				assert k in self.state_timeouts, k
 				self.state_timeouts[k] = v
 		super(HTTPTimeout, self).__init__()
 		self._state = next(iter(self.state_timeouts))
@@ -374,7 +374,7 @@ class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
 			if self.debug_requests:
 				log.debug(
 					'HTTP transport (underlying protocol) error ({} {}): {}'\
-					.format(method, url_debug, err.message) )
+					.format(method, url_debug, err.message or repr(err.args)) )
 			raise UnderlyingProtocolError(err)
 
 		except ProtocolError as err:
