@@ -350,7 +350,7 @@ class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
 		if isinstance(url, unicode): url = url.encode('utf-8')
 		if isinstance(method, unicode): method = method.encode('ascii')
 
-		code = None
+		code = res_body = None
 		try:
 			res = yield first_result( timeout,
 				self.request_agent.request( method.upper(), url,
@@ -360,17 +360,20 @@ class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
 			if code not in [http.OK, http.CREATED]:
 				raise ProtocolError(code, res.phrase)
 
-			body = defer.Deferred()
-			res.deliverBody(DataReceiver(body, timer=timeout))
-			body = yield first_result(timeout, body)
+			res_body = defer.Deferred()
+			res.deliverBody(DataReceiver(res_body, timer=timeout))
+			res_body = yield first_result(timeout, res_body)
 
 			if self.debug_requests:
 				log.debug( 'HTTP request done ({} {}): {} {} {}, body_len: {}'\
-					.format(method, url_debug, code, res.phrase, res.version, len(body)) )
-			defer.returnValue(json.loads(body) if not raw else body)
+					.format(method, url_debug, code, res.phrase, res.version, len(res_body)) )
+			defer.returnValue(json.loads(res_body) if not raw else res_body)
 
 		except ( timeout.ActivityTimeout, ResponseFailed,
 				RequestNotSent, RequestTransmissionFailed ) as err:
+			if isinstance(err, timeout.ActivityTimeout):
+				if not res.called: res.cancel()
+				if res_body and not res_body.called: res_body.cancel()
 			if self.debug_requests:
 				log.debug(
 					'HTTP transport (underlying protocol) error ({} {}): {}'\
