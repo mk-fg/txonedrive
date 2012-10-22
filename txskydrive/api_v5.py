@@ -350,11 +350,12 @@ class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
 		if isinstance(url, unicode): url = url.encode('utf-8')
 		if isinstance(method, unicode): method = method.encode('ascii')
 
+		res_deferred = first_result( timeout,
+			self.request_agent.request( method.upper(), url,
+				Headers(dict((k,[v]) for k,v in (headers or dict()).viewitems())), body ) )
 		code = res_body = None
 		try:
-			res = yield first_result( timeout,
-				self.request_agent.request( method.upper(), url,
-					Headers(dict((k,[v]) for k,v in (headers or dict()).viewitems())), body ) )
+			res = yield res_deferred
 			code = res.code
 			if code == http.NO_CONTENT: defer.returnValue(None)
 			if code not in [http.OK, http.CREATED]:
@@ -372,7 +373,7 @@ class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
 		except ( timeout.ActivityTimeout, ResponseFailed,
 				RequestNotSent, RequestTransmissionFailed ) as err:
 			if isinstance(err, timeout.ActivityTimeout):
-				if not res.called: res.cancel()
+				if not res_deferred.called: res_deferred.cancel()
 				if res_body and not res_body.called: res_body.cancel()
 			if self.debug_requests:
 				log.debug(
