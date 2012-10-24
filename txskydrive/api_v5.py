@@ -63,12 +63,18 @@ class DataReceiver(protocol.Protocol):
 	def dataReceived(self, chunk):
 		if self.timer:
 			if not self.data: self.timer.state_next('res_body') # first chunk
-			else: self.timer.timeout_reset()
-		self.data.append(chunk)
+			else:
+				try: self.timer.timeout_reset()
+				except self.timer.TooLate as err:
+					self.done.errback(err)
+					self.timer = self.data = None
+		if self.data is not None: self.data.append(chunk)
 
 	def connectionLost(self, reason):
 		if self.timer: self.timer.state_next()
-		self.done.callback(b''.join(self.data))
+		if not self.done.called: # might errback due to timer
+			self.done.callback(
+				b''.join(self.data) if self.data is not None else b'' )
 
 
 
@@ -97,7 +103,11 @@ class FileBodyProducer(object):
 	def upload_file(self, src, dst):
 		try:
 			while True:
-				if self.timer: self.timer.timeout_reset()
+				if self.timer:
+					try: self.timer.timeout_reset()
+					except self.timer.TooLate as err:
+						self.timer = None
+						break
 				chunk = src.read(self.chunk_size)
 				if not chunk: break
 				yield dst.write(chunk)
@@ -230,6 +240,7 @@ class HTTPTimeout(defer.Deferred, object):
 		Callback is invoked when the last state is passed or on state_finished() call.'''
 
 	class ActivityTimeout(Exception): pass
+	class TooLate(Exception): pass
 
 	_state = _timeout = None
 	state_timeouts = OrderedDict([ ('req_headers', 60),
@@ -266,6 +277,7 @@ class HTTPTimeout(defer.Deferred, object):
 			self._timeout = reactor.callLater( timeout,
 				lambda: self.errback(self.ActivityTimeout(
 					self._state, self.state_timeouts[self._state] )) )
+		elif not self._timeout.active(): raise self.TooLate()
 		self._timeout.reset(timeout)
 
 
