@@ -17,8 +17,8 @@ from twisted.internet import defer, reactor, ssl, task, protocol
 
 from twisted.web.client import Agent, RedirectAgent,\
 	HTTPConnectionPool, HTTP11ClientProtocol, ContentDecoderAgent, GzipDecoder
-from twisted.web.client import ResponseFailed,\
-	RequestNotSent, RequestTransmissionFailed
+from twisted.web.client import ResponseDone,\
+	ResponseFailed, RequestNotSent, RequestTransmissionFailed
 
 try: # doesn't seem to be a part of public api
 	from twisted.web._newclient import RequestGenerationFailed
@@ -72,7 +72,9 @@ class DataReceiver(protocol.Protocol):
 
 	def connectionLost(self, reason):
 		if self.timer: self.timer.state_next()
-		if not self.done.called: # might errback due to timer
+		if isinstance(reason.value, ResponseDone): # some error
+			self.done.callback(reason)
+		elif not self.done.called: # might errback due to timer
 			self.done.callback(
 				b''.join(self.data) if self.data is not None else b'' )
 
