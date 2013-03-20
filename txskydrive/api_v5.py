@@ -14,6 +14,7 @@ from twisted.web.iweb import IBodyProducer, UNKNOWN_LENGTH
 from twisted.web.http_headers import Headers
 from twisted.web import http
 from twisted.internet import defer, reactor, ssl, task, protocol
+from twisted.internet.error import TimeoutError
 
 from twisted.web.client import Agent, RedirectAgent,\
 	HTTPConnectionPool, HTTP11ClientProtocol, ContentDecoderAgent, GzipDecoder
@@ -384,8 +385,8 @@ class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
 					.format(method, url_debug, code, res.phrase, res.version, len(res_body)) )
 			defer.returnValue(json.loads(res_body) if not raw else res_body)
 
-		except ( timeout.ActivityTimeout, ResponseFailed,
-				RequestNotSent, RequestTransmissionFailed ) as err:
+		except ( timeout.ActivityTimeout, TimeoutError,
+				ResponseFailed, RequestNotSent, RequestTransmissionFailed ) as err:
 			if isinstance(err, timeout.ActivityTimeout):
 				if not res_deferred.called: res_deferred.cancel()
 				if res_body and not res_body.called: res_body.cancel()

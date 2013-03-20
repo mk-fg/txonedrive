@@ -12,7 +12,7 @@ except IOError: readme = ''
 setup(
 
 	name = 'txSkyDrive', # just trying to mimic tx* naming convention
-	version = '13.03.0',
+	version = '13.03.1',
 	author = 'Mike Kazantsev',
 	author_email = 'mk.fraggod@gmail.com',
 	license = 'WTFPL',
