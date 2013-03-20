@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 from setuptools import setup, find_packages
+import txskydrive
 import os
 
 pkg_root = os.path.dirname(__file__)
@@ -12,7 +13,7 @@ except IOError: readme = ''
 setup(
 
 	name = 'txSkyDrive', # just trying to mimic tx* naming convention
-	version = '13.03.1',
+	version = txskydrive.__version__,
 	author = 'Mike Kazantsev',
 	author_email = 'mk.fraggod@gmail.com',
 	license = 'WTFPL',
