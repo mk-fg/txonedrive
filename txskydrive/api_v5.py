@@ -73,7 +73,7 @@ class DataReceiver(protocol.Protocol):
 
 	def connectionLost(self, reason):
 		if self.timer: self.timer.state_next()
-		if isinstance(reason.value, ResponseDone): # some error
+		if not isinstance(reason.value, ResponseDone): # some error
 			self.done.callback(reason)
 		elif not self.done.called: # might errback due to timer
 			self.done.callback(
