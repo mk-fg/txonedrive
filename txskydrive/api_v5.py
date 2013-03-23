@@ -492,7 +492,7 @@ class txSkyDrive(txSkyDriveAPI):
 		'Return tuple of (bytes_available, bytes_quota).'
 		defer.returnValue(
 			op.itemgetter('available', 'quota')\
-				((yield super(SkyDriveAPI, self).get_quota())) )
+				((yield super(txSkyDrive, self).get_quota())) )
 
 	@defer.inlineCallbacks
 	def copy(self, obj_id, folder_id, move=False):
@@ -503,13 +503,13 @@ class txSkyDrive(txSkyDriveAPI):
 				" seem to work with copy/move operations, resolving it to id")
 			folder_id = yield self.info(folder_id)['id']
 		defer.returnValue((
-			yield super(SkyDriveAPI, self).copy(obj_id, folder_id, move=move) ))
+			yield super(txSkyDrive, self).copy(obj_id, folder_id, move=move) ))
 
 	@defer.inlineCallbacks
 	def comments(self, obj_id):
 		'Get a list of comments (message + metadata) for an object.'
 		defer.returnValue(
-			(yield super(SkyDriveAPI, self).comments(obj_id))['data'] )
+			(yield super(txSkyDrive, self).comments(obj_id))['data'] )
 
 
 
