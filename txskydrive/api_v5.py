@@ -352,8 +352,7 @@ class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
 				body = FileBodyProducer(io.BytesIO(urlencode(data)), timer=timeout)
 			else:
 				headers.setdefault('Content-Type', 'application/json')
-				body = FileBodyProducer(io.BytesIO(
-					urlencode(json.dumps(data)) ), timer=timeout)
+				body = FileBodyProducer(io.BytesIO(json.dumps(data)), timer=timeout)
 
 		if files is not None:
 			boundary = os.urandom(16).encode('hex')
