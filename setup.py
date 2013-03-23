@@ -21,7 +21,7 @@ setup(
 		'oauth2', 'rest', 'microsoft', 'cloud', 'live', 'liveconnect',
 		'json', 'storage', 'storage provider', 'file hosting' ],
 
-	url = 'http://github.com/mk-fg/txskydrive',
+	url = 'https://github.com/mk-fg/txskydrive',
 
 	description = 'Twisted-based async interface'
 		' for Microsoft LiveConnect SkyDrive REST API v5.0',
