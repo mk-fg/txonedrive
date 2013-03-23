@@ -581,5 +581,6 @@ if __name__ == '__main__':
 		if reactor.running: reactor.stop()
 		return res
 
-	test().addBoth(done)
+	reactor.callWhenRunning(
+		lambda: defer.maybeDeferred(test).addBoth(done) )
 	reactor.run()
