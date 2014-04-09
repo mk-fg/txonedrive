@@ -26,9 +26,9 @@ try: # doesn't seem to be a part of public api
 except ImportError: # won't be handled
 	class RequestGenerationFailed(Exception): pass
 
-from skydrive.api_v5 import SkyDriveInteractionError,\
+from onedrive.api_v5 import OneDriveInteractionError,\
 	ProtocolError, AuthenticationError, DoesNotExists
-from skydrive import api_v5, conf
+from onedrive import api_v5, conf
 
 from twisted.python import log as twisted_log
 
@@ -148,7 +148,7 @@ class MultipartDataSender(FileBodyProducer):
 	def __init__(self, fields, boundary, timer=None):
 		self.fields, self.boundary, self.timer = fields, boundary, timer
 
-		# "Transfer-Encoding: chunked" doesn't work with SkyDrive,
+		# "Transfer-Encoding: chunked" doesn't work with OneDrive,
 		#  so calculate_length() must be called to replace it with some value
 		self.length = UNKNOWN_LENGTH
 
@@ -304,8 +304,8 @@ def _dump_trunc(v, trunc_len=100):
 	return v
 
 
-class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
-	'SkyDrive API client.'
+class txOneDriveAPI(api_v5.OneDriveAPIWrapper):
+	'OneDrive API client.'
 
 	#: Options to twisted.web.client.HTTPConnectionPool
 	request_pool_options = dict(
@@ -327,7 +327,7 @@ class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
 
 
 	def __init__(self, *argz, **kwz):
-		super(txSkyDriveAPI, self).__init__(*argz, **kwz)
+		super(txOneDriveAPI, self).__init__(*argz, **kwz)
 		pool = self.request_pool = QuietHTTPConnectionPool( reactor,
 				debug_requests=self.debug_requests, **self.request_pool_options )
 		self.request_agent = ContentDecoderAgent(RedirectAgent(Agent(
@@ -346,7 +346,7 @@ class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
 
 		method, body = method.lower(), None
 		headers = dict() if not headers else headers.copy()
-		headers.setdefault('User-Agent', 'txSkyDrive')
+		headers.setdefault('User-Agent', 'txOneDrive')
 
 		if data is not None:
 			if method == 'post':
@@ -448,8 +448,8 @@ class txSkyDriveAPI(api_v5.SkyDriveAPIWrapper):
 
 
 
-class txSkyDrive(txSkyDriveAPI):
-	'More biased SkyDrive interface with some convenience methods.'
+class txOneDrive(txOneDriveAPI):
+	'More biased OneDrive interface with some convenience methods.'
 
 	@defer.inlineCallbacks
 	def resolve_path( self, path,
@@ -481,7 +481,7 @@ class txSkyDrive(txSkyDriveAPI):
 			limit is passed to the API, so might be used as optimization.
 			type_filter can be set to type (str) or sequence
 				of object types to return, post-api-call processing.'''
-		lst = ( yield super(txSkyDrive, self)\
+		lst = ( yield super(txOneDrive, self)\
 			.listdir(folder_id=folder_id, limit=limit) )['data']
 		if type_filter:
 			if isinstance(type_filter, types.StringTypes): type_filter = {type_filter}
@@ -493,7 +493,7 @@ class txSkyDrive(txSkyDriveAPI):
 		'Return tuple of (bytes_available, bytes_quota).'
 		defer.returnValue(
 			op.itemgetter('available', 'quota')\
-				((yield super(txSkyDrive, self).get_quota())) )
+				((yield super(txOneDrive, self).get_quota())) )
 
 	@defer.inlineCallbacks
 	def copy(self, obj_id, folder_id, move=False):
@@ -504,29 +504,29 @@ class txSkyDrive(txSkyDriveAPI):
 				" seem to work with copy/move operations, resolving it to id")
 			folder_id = yield self.info(folder_id)['id']
 		defer.returnValue((
-			yield super(txSkyDrive, self).copy(obj_id, folder_id, move=move) ))
+			yield super(txOneDrive, self).copy(obj_id, folder_id, move=move) ))
 
 	@defer.inlineCallbacks
 	def comments(self, obj_id):
 		'Get a list of comments (message + metadata) for an object.'
 		defer.returnValue(
-			(yield super(txSkyDrive, self).comments(obj_id))['data'] )
+			(yield super(txOneDrive, self).comments(obj_id))['data'] )
 
 
 
-class txSkyDrivePersistent(txSkyDrive, conf.ConfigMixin):
+class txOneDrivePersistent(txOneDrive, conf.ConfigMixin):
 
-	@ft.wraps(txSkyDrive.auth_get_token)
+	@ft.wraps(txOneDrive.auth_get_token)
 	def auth_get_token(self, *argz, **kwz):
 		d = defer.maybeDeferred(super(
-			txSkyDrivePersistent, self ).auth_get_token, *argz, **kwz)
+			txOneDrivePersistent, self ).auth_get_token, *argz, **kwz)
 		d.addCallback(lambda ret: [self.sync(), ret][1])
 		return d
 
 	def __del__(self): self.sync()
 
 
-class txSkyDrivePluggableSync(txSkyDrive):
+class txOneDrivePluggableSync(txOneDrive):
 
 	config_update_keys = ['auth_access_token', 'auth_refresh_token']
 
@@ -534,7 +534,7 @@ class txSkyDrivePluggableSync(txSkyDrive):
 	config_update_callback = None
 
 	def __init__(self, *argz, **kwz):
-		super(txSkyDrivePluggableSync, self).__init__(*argz, **kwz)
+		super(txOneDrivePluggableSync, self).__init__(*argz, **kwz)
 		if not self.config_update_callback:
 			raise TypeError('config_update_callback must be set')
 
@@ -544,10 +544,10 @@ class txSkyDrivePluggableSync(txSkyDrive):
 		self.config_update_callback(**dict(
 			(k, getattr(self, k)) for k in self.config_update_keys ))
 
-	@ft.wraps(txSkyDrive.auth_get_token)
+	@ft.wraps(txOneDrive.auth_get_token)
 	def auth_get_token(self, *argz, **kwz):
 		d = defer.maybeDeferred(super(
-			txSkyDrivePluggableSync, self ).auth_get_token, *argz, **kwz)
+			txOneDrivePluggableSync, self ).auth_get_token, *argz, **kwz)
 		d.addCallback(lambda ret: [self.sync(), ret][1])
 		return d
 
@@ -562,8 +562,8 @@ if __name__ == '__main__':
 
 	@defer.inlineCallbacks
 	def test():
-		req_pool_optz = txSkyDrivePersistent.request_pool_options.copy()
-		api = txSkyDrivePersistent.from_conf(
+		req_pool_optz = txOneDrivePersistent.request_pool_options.copy()
+		api = txOneDrivePersistent.from_conf(
 			debug_requests=True, request_pool_options=req_pool_optz )
 
 		print map(op.itemgetter('name'), (yield api.listdir()))

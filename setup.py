@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 from setuptools import setup, find_packages
-import txskydrive
+import txonedrive
 import os
 
 pkg_root = os.path.dirname(__file__)
@@ -12,19 +12,19 @@ except IOError: readme = ''
 
 setup(
 
-	name = 'txSkyDrive', # just trying to mimic tx* naming convention
-	version = txskydrive.__version__,
+	name = 'txOneDrive', # just trying to mimic tx* naming convention
+	version = txonedrive.__version__,
 	author = 'Mike Kazantsev',
 	author_email = 'mk.fraggod@gmail.com',
 	license = 'WTFPL',
-	keywords = [ 'skydrive', 'twisted', 'async', 'api',
+	keywords = [ 'onedrive', 'skydrive', 'twisted', 'async', 'api',
 		'oauth2', 'rest', 'microsoft', 'cloud', 'live', 'liveconnect',
 		'json', 'storage', 'storage provider', 'file hosting' ],
 
-	url = 'https://github.com/mk-fg/txskydrive',
+	url = 'https://github.com/mk-fg/txonedrive',
 
 	description = 'Twisted-based async interface'
-		' for Microsoft LiveConnect SkyDrive REST API v5.0',
+		' for Microsoft LiveConnect OneDrive REST API v5.0',
 	long_description = readme,
 
 	classifiers = [
@@ -42,7 +42,7 @@ setup(
 		'Topic :: System :: Archiving',
 		'Topic :: System :: Filesystems' ],
 
-	install_requires = ['Twisted >= 12.2.0', 'python-skydrive >= 12.10.5'],
+	install_requires = ['Twisted >= 12.2.0', 'python-onedrive >= 12.10.5'],
 
 	packages = find_packages(),
 	include_package_data = True,
