@@ -28,14 +28,14 @@ Following script will print listing of the root OneDrive folder, upload
 it.
 
 	from twisted.internet import defer, reactor
-	from txonedrive import txOneDrivePersistent
+	from txonedrive.api_v5 import txOneDrivePersistent
 
 	@defer.inlineCallbacks
 	def do_stuff():
 		api = txOneDrivePersistent.from_conf()
 
 		# Print root directory ("me/skydrive") listing
-		print (e['name'] for e in (yield api.listdir()))
+		print list(e['name'] for e in (yield api.listdir()))
 
 		# Upload "test.txt" file from local current directory
 		file_info = yield api.put('test.txt')
@@ -49,7 +49,7 @@ it.
 		# Remove the file
 		yield api.delete(file_id)
 
-	do_stuff().addBoth(lambda ignored: reactor.stop())
+	do_stuff().addCallback(lambda ignored: reactor.stop())
 	reactor.run()
 
 Note that txOneDriveAPIPersistent convenience class uses Microsoft LiveConnect
