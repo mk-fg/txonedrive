@@ -1,6 +1,11 @@
 txOneDrive
 ----------------------------------------
 
+**Deprecation Notice:** this module uses obsolete API and haven't been
+maintained for a while, use official
+[onedrive-sdk-python](https://github.com/OneDrive/onedrive-sdk-python)
+module or something built on it instead.
+
 Twisted-based python async interface for
 [OneDrive API (version 5.0)](http://msdn.microsoft.com/en-us/library/live/hh826521)
 (formerly known as SkyDrive).
@@ -60,6 +65,12 @@ docs](https://github.com/mk-fg/python-onedrive#command-line-usage).
 
 Installation
 ----------------------------------------
+
+In case you've missed Deprecation Notice at the start of this file:
+
+* **DO NOT USE** this project for anything new, use official
+  [onedrive-sdk-python](https://github.com/OneDrive/onedrive-sdk-python)
+  instead.
 
 It's a regular package for Python 2.7 (not 3.X).
 

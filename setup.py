@@ -23,8 +23,8 @@ setup(
 
 	url = 'https://github.com/mk-fg/txonedrive',
 
-	description = 'Twisted-based async interface'
-		' for Microsoft LiveConnect OneDrive REST API v5.0',
+	description = 'Obsolete twisted-based'
+		' python async interface for old MS OneDrive API',
 	long_description = readme,
 
 	classifiers = [
